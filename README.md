@@ -7,6 +7,8 @@
 
 Este repositório contém um tutorial interativo em shell script para aprender e praticar comandos Docker, desde o básico até conceitos avançados, como Docker Swarm e Docker Compose. O tutorial guia o usuário por diferentes níveis de dificuldade, validando os comandos e verificando a saída esperada.
 
+Agradeço ao amigo Marcelo @msanttos7 pelo auxílio no desenvolvimento desta atividade.
+
 ## 📌 Conteúdo do Tutorial
 
 O tutorial é dividido em cinco níveis progressivos:
