@@ -1,9 +1,9 @@
 # Docker Play - Tutorial Interativo 🚀
 
 ![Segmento](https://img.shields.io/badge/Segmento_:-Infraestrutura-blue?style=flat-square) 
-![Fase](https://img.shields.io/badge/Fase_:-Alpha-green?style=flat-square) 
+![Fase](https://img.shields.io/badge/Fase_:-Estável-green?style=flat-square) 
 ![Tecnologias](https://img.shields.io/badge/Tecnologias_:-Linux,_Shell_Script,_Docker-yellow?style=flat-square) 
-![Versão](https://img.shields.io/badge/versão_:-1.0-darkyellow?style=flat-square)
+![Versão](https://img.shields.io/badge/versão_:-3.0-darkyellow?style=flat-square)
 
 Este repositório contém um tutorial interativo em shell script para aprender e praticar comandos Docker, desde o básico até conceitos avançados, como Docker Swarm e Docker Compose. O tutorial guia o usuário por diferentes níveis de dificuldade, validando os comandos e verificando a saída esperada.
 
