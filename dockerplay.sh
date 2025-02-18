@@ -65,57 +65,6 @@ show_command_help() {
     echo -e "$1"
 }
 
-# Função de limpeza global
-cleanup() {
-    show_section "Limpeza do Ambiente"
-    
-    # Verifica Docker Compose
-    if [ -f "docker-compose.yml" ]; then
-        show_progress "Limpando recursos do Docker Compose..."
-        docker-compose down -v 2>/dev/null || true
-        rm -f docker-compose.yml 2>/dev/null || true
-        show_success "Recursos do Docker Compose limpos!"
-    fi
-
-    # Verifica containers em execução
-    if docker ps -q &>/dev/null; then
-        show_progress "Parando containers em execução..."
-        docker stop $(docker ps -q) 2>/dev/null || true
-        show_success "Containers parados!"
-    fi
-
-    # Remove containers parados
-    if docker ps -aq &>/dev/null; then
-        show_progress "Removendo containers parados..."
-        docker rm $(docker ps -aq) 2>/dev/null || true
-        show_success "Containers removidos!"
-    fi
-
-    # Remove volumes não utilizados
-    if docker volume ls -q &>/dev/null; then
-        show_progress "Removendo volumes não utilizados..."
-        docker volume prune -f 2>/dev/null || true
-        show_success "Volumes removidos!"
-    fi
-
-    # Remove redes não utilizadas
-    if docker network ls --filter "type=custom" -q &>/dev/null; then
-        show_progress "Removendo redes não utilizadas..."
-        docker network prune -f 2>/dev/null || true
-        show_success "Redes removidas!"
-    fi
-
-    # Remove arquivos temporários
-    local temp_files=(app.py requirements.txt Dockerfile)
-    for file in "${temp_files[@]}"; do
-        if [ -f "$file" ]; then
-            rm -f "$file"
-        fi
-    done
-
-    show_success "Limpeza concluída!"
-}
-
 # Função para executar comando com timeout
 execute_with_timeout() {
     local cmd=$1
@@ -127,54 +76,6 @@ execute_with_timeout() {
         show_error "O $description excedeu o tempo limite de $timeout segundos"
         return 1
     }
-}
-
-# Verificações iniciais
-check_requirements() {
-    show_section "Verificação de Requisitos"
-    local missing_requirements=false
-
-    show_objective "Verificar se todos os componentes necessários estão instalados e funcionando"
-
-    # Verifica Docker
-    if ! command -v docker &> /dev/null; then
-        show_error "Docker não está instalado"
-        show_tip "Instale o Docker seguindo as instruções em: https://docs.docker.com/get-docker/"
-        show_command_help "Para instalar no Ubuntu: sudo apt-get install docker.io"
-        missing_requirements=true
-    else
-        local docker_version=$(docker --version)
-        show_success "Docker está instalado ($docker_version)"
-    fi
-
-    # Verifica Docker daemon
-    if ! docker info &> /dev/null; then
-        show_error "O daemon do Docker não está rodando"
-        show_tip "Inicie o serviço do Docker:"
-        show_command_help "Linux: sudo systemctl start docker
-Windows/Mac: Inicie o Docker Desktop"
-        missing_requirements=true
-    else
-        show_success "Docker daemon está rodando"
-    fi
-
-    # Verifica permissões do usuário
-    if ! docker info &> /dev/null && [ "$EUID" -ne 0 ]; then
-        show_error "Usuário atual não tem permissão para executar comandos Docker"
-        show_tip "Adicione seu usuário ao grupo docker:"
-        show_command_help "sudo usermod -aG docker $USER
-Depois, faça logout e login novamente"
-        missing_requirements=true
-    fi
-
-    if [ "$missing_requirements" = true ]; then
-        show_error "Por favor, instale/configure os requisitos faltantes e tente novamente"
-        return 1
-    fi
-
-    show_success "Todos os requisitos estão satisfeitos!"
-    echo -e "\n----------------------------------------\n"
-    return 0
 }
 
 # Função para validar se o comando foi realmente executado
@@ -273,6 +174,214 @@ check_command_and_output() {
     fi
     echo -e "\n----------------------------------------\n"
     return 0
+}
+
+# Função para instalar o Docker e requisitos
+install_docker() {
+    show_section "Instalação do Docker"
+    
+    # Detecta o sistema operacional
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$NAME
+        VERSION=$VERSION_ID
+    else
+        show_error "Sistema operacional não suportado"
+        return 1
+    fi
+
+    show_progress "Detectado sistema: $OS $VERSION"
+
+    case "$OS" in
+        "Ubuntu"|"Debian GNU/Linux")
+            show_progress "Instalando Docker no Ubuntu/Debian..."
+            
+            # Remove versões antigas
+            sudo apt-get remove docker docker-engine docker.io containerd runc 2>/dev/null || true
+            
+            # Atualiza os repositórios
+            show_progress "Atualizando repositórios..."
+            sudo apt-get update
+            
+            # Instala dependências
+            show_progress "Instalando dependências..."
+            sudo apt-get install -y \
+                apt-transport-https \
+                ca-certificates \
+                curl \
+                gnupg \
+                lsb-release
+
+            # Adiciona a chave GPG oficial do Docker
+            show_progress "Adicionando chave GPG do Docker..."
+            curl -fsSL https://download.docker.com/linux/$ID/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+            # Adiciona o repositório do Docker
+            show_progress "Configurando repositório do Docker..."
+            echo \
+                "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/$ID \
+                $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+            # Atualiza novamente e instala o Docker
+            show_progress "Instalando Docker..."
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+            # Adiciona usuário ao grupo docker
+            show_progress "Configurando permissões..."
+            sudo usermod -aG docker $USER
+            ;;
+            
+        "CentOS Linux"|"Red Hat Enterprise Linux"|"Fedora")
+            show_progress "Instalando Docker no CentOS/RHEL/Fedora..."
+            
+            # Remove versões antigas
+            sudo yum remove docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null || true
+            
+            # Instala dependências
+            show_progress "Instalando dependências..."
+            sudo yum install -y yum-utils
+
+            # Adiciona repositório do Docker
+            show_progress "Configurando repositório do Docker..."
+            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+            # Instala o Docker
+            show_progress "Instalando Docker..."
+            sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+            # Adiciona usuário ao grupo docker
+            show_progress "Configurando permissões..."
+            sudo usermod -aG docker $USER
+            ;;
+            
+        *)
+            show_error "Sistema operacional não suportado: $OS"
+            show_tip "Por favor, visite https://docs.docker.com/engine/install/ para instruções específicas"
+            return 1
+            ;;
+    esac
+
+    # Inicia o serviço Docker
+    show_progress "Iniciando serviço Docker..."
+    sudo systemctl start docker
+    sudo systemctl enable docker
+
+    show_success "Docker instalado com sucesso!"
+    show_tip "Para que as alterações de grupo tenham efeito, você precisa fazer logout e login novamente"
+    show_tip "Após fazer logout e login, execute este script novamente"
+
+    # Verifica se precisa fazer logout
+    if ! groups | grep -q docker; then
+        show_explanation "É necessário fazer logout e login para que as alterações de grupo tenham efeito"
+        read -p "Pressione Enter para fazer logout agora..."
+        kill -TERM -1
+    fi
+
+    return 0
+}
+
+# Verificações iniciais
+check_requirements() {
+    show_section "Verificação de Requisitos"
+    local missing_requirements=false
+
+    show_objective "Verificar se todos os componentes necessários estão instalados e funcionando"
+
+    # Verifica Docker
+    if ! command -v docker &> /dev/null; then
+        show_error "Docker não está instalado"
+        show_tip "Vamos tentar instalar o Docker automaticamente"
+        if ! install_docker; then
+            show_error "Falha na instalação automática do Docker"
+            return 1
+        fi
+    else
+        local docker_version=$(docker --version)
+        show_success "Docker está instalado ($docker_version)"
+    fi
+
+    # Verifica Docker daemon
+    if ! docker info &> /dev/null; then
+        show_error "O daemon do Docker não está rodando"
+        show_tip "Tentando iniciar o serviço do Docker..."
+        sudo systemctl start docker || {
+            show_error "Não foi possível iniciar o Docker"
+            show_tip "Execute: sudo systemctl start docker"
+            missing_requirements=true
+        }
+    else
+        show_success "Docker daemon está rodando"
+    fi
+
+    # Verifica permissões do usuário
+    if ! docker info &> /dev/null && [ "$EUID" -ne 0 ]; then
+        show_error "Usuário atual não tem permissão para executar comandos Docker"
+        show_tip "Tentando adicionar usuário ao grupo docker..."
+        sudo usermod -aG docker $USER
+        show_tip "Por favor, faça logout e login novamente para que as alterações tenham efeito"
+        return 1
+    fi
+
+    if [ "$missing_requirements" = true ]; then
+        show_error "Por favor, corrija os problemas e tente novamente"
+        return 1
+    fi
+
+    show_success "Todos os requisitos estão satisfeitos!"
+    echo -e "\n----------------------------------------\n"
+    return 0
+}
+
+# Função de limpeza global
+cleanup() {
+    show_section "Limpeza do Ambiente"
+    
+    # Verifica Docker Compose
+    if [ -f "docker-compose.yml" ]; then
+        show_progress "Limpando recursos do Docker Compose..."
+        docker-compose down -v 2>/dev/null || true
+        rm -f docker-compose.yml 2>/dev/null || true
+        show_success "Recursos do Docker Compose limpos!"
+    fi
+
+    # Verifica containers em execução
+    if docker ps -q &>/dev/null; then
+        show_progress "Parando containers em execução..."
+        docker stop $(docker ps -q) 2>/dev/null || true
+        show_success "Containers parados!"
+    fi
+
+    # Remove containers parados
+    if docker ps -aq &>/dev/null; then
+        show_progress "Removendo containers parados..."
+        docker rm $(docker ps -aq) 2>/dev/null || true
+        show_success "Containers removidos!"
+    fi
+
+    # Remove volumes não utilizados
+    if docker volume ls -q &>/dev/null; then
+        show_progress "Removendo volumes não utilizados..."
+        docker volume prune -f 2>/dev/null || true
+        show_success "Volumes removidos!"
+    fi
+
+    # Remove redes não utilizadas
+    if docker network ls --filter "type=custom" -q &>/dev/null; then
+        show_progress "Removendo redes não utilizadas..."
+        docker network prune -f 2>/dev/null || true
+        show_success "Redes removidas!"
+    fi
+
+    # Remove arquivos temporários
+    local temp_files=(app.py requirements.txt Dockerfile)
+    for file in "${temp_files[@]}"; do
+        if [ -f "$file" ]; then
+            rm -f "$file"
+        fi
+    done
+
+    show_success "Limpeza concluída!"
 }
 
 # --- Nível 1 - Básico ---
@@ -422,21 +531,30 @@ nivel_2() {
     # Limpeza inicial
     show_progress "Preparando ambiente..."
     
+    # Limpa containers anteriores
+    if docker ps -a | grep -qE "$CONTAINER_NAME|webserver"; then
+        show_progress "Containers anteriores encontrados, removendo..."
+        docker stop $CONTAINER_NAME webserver 2>/dev/null || true
+        docker rm $CONTAINER_NAME webserver 2>/dev/null || true
+        show_success "Containers anteriores removidos!"
+    fi
+    
     # Limpa volumes anteriores
     if docker volume ls | grep -q "$VOLUME_NAME"; then
         show_progress "Volume anterior encontrado, removendo..."
         docker volume rm "$VOLUME_NAME" 2>/dev/null || true
+        show_success "Volume anterior removido!"
     fi
 
     # Limpa redes anteriores
     if docker network ls | grep -q "$NETWORK_NAME"; then
         show_progress "Rede anterior encontrada, removendo..."
         docker network rm "$NETWORK_NAME" 2>/dev/null || true
+        show_success "Rede anterior removida!"
     fi
 
     echo -e "\n1. Criar volume Docker"
     show_objective "Aprender a criar volumes para persistência de dados"
-    
     check_command_and_output \
         "docker volume create $VOLUME_NAME" \
         "$VOLUME_NAME" \
@@ -451,7 +569,6 @@ docker volume inspect : Mostra detalhes do volume"
 
     echo -e "\n2. Listar volumes"
     show_objective "Verificar volumes disponíveis"
-    
     check_command_and_output \
         "docker volume ls" \
         "$VOLUME_NAME" \
@@ -461,44 +578,41 @@ docker volume inspect : Mostra detalhes do volume"
         "O volume deve aparecer na listagem" \
         "Volume listado com sucesso!" \
         "docker volume ls : Lista todos os volumes
-docker volume ls -q : Lista apenas os nomes dos volumes"
+docker volume inspect : Mostra detalhes do volume"
 
     echo -e "\n3. Criar container com volume"
     show_objective "Aprender a montar volumes em containers"
-    
     check_command_and_output \
-        "docker run -d --name $CONTAINER_NAME -v $VOLUME_NAME:/data ubuntu sleep infinity" \
+        "docker run -d --name $CONTAINER_NAME -v $VOLUME_NAME:/data ubuntu tail -f /dev/null" \
         "[0-9a-f]" \
-        "Erro ao criar o container com volume" \
+        "Erro ao criar container" \
         "output" \
-        "O parâmetro -v monta o volume no diretório /data do container" \
-        "Verifique se o volume foi criado corretamente" \
-        "Container criado com volume montado!" \
+        "Este comando cria um container que usa nosso volume" \
+        "Verifique se o volume existe" \
+        "Container criado com volume!" \
         "docker run -v : Monta um volume no container
-[VOLUME]:[CAMINHO] : Define onde o volume será montado"
+-d : Executa em background
+tail -f /dev/null : Mantém o container rodando"
 
     echo -e "\n4. Criar arquivo no volume"
     show_objective "Testar a persistência de dados no volume"
-    
     check_command_and_output \
-        "docker exec $CONTAINER_NAME sh -c 'echo \"teste\" > /data/arquivo.txt'" \
-        "" \
+        "docker exec $CONTAINER_NAME sh -c 'echo \"teste\" > /data/arquivo.txt && echo \"Arquivo criado\"'" \
+        "Arquivo criado" \
         "Erro ao criar arquivo" \
-        "exists" \
-        "Vamos criar um arquivo dentro do volume para testar a persistência" \
+        "output" \
+        "Vamos criar um arquivo dentro do volume" \
         "Verifique se o container está rodando" \
         "Arquivo criado com sucesso!" \
-        "docker exec : Executa um comando no container
--i : Modo interativo
--t : Aloca um pseudo-TTY"
+        "docker exec : Executa comando no container
+echo : Cria arquivo com conteúdo"
 
     echo -e "\n5. Verificar conteúdo do arquivo"
-    show_objective "Confirmar que o arquivo foi criado"
-    
+    show_objective "Confirmar que o arquivo foi criado corretamente"
     check_command_and_output \
         "docker exec $CONTAINER_NAME cat /data/arquivo.txt" \
         "teste" \
-        "Arquivo não encontrado" \
+        "Arquivo não encontrado ou vazio" \
         "output" \
         "Vamos ler o conteúdo do arquivo criado" \
         "Verifique se o arquivo foi criado corretamente" \
@@ -508,13 +622,12 @@ ls /data : Lista arquivos no diretório"
 
     echo -e "\n6. Criar rede Docker"
     show_objective "Aprender a criar redes para comunicação entre containers"
-    
     check_command_and_output \
         "docker network create $NETWORK_NAME" \
         "[0-9a-f]" \
-        "Erro ao criar a rede" \
+        "Erro ao criar rede" \
         "output" \
-        "Redes Docker permitem que containers se comuniquem entre si" \
+        "Redes permitem que containers se comuniquem entre si" \
         "Verifique se não há outra rede com o mesmo nome" \
         "Rede criada com sucesso!" \
         "docker network create : Cria uma nova rede
@@ -522,18 +635,31 @@ docker network ls : Lista redes
 docker network inspect : Mostra detalhes da rede"
 
     echo -e "\n7. Criar container na rede"
-    show_objective "Aprender a conectar containers à rede"
-    
+    show_objective "Aprender a conectar containers em redes"
     check_command_and_output \
         "docker run -d --name webserver --network $NETWORK_NAME nginx" \
         "[0-9a-f]" \
-        "Erro ao criar container na rede" \
+        "Erro ao criar container" \
         "output" \
         "Vamos criar um container nginx conectado à nossa rede" \
         "Verifique se a rede foi criada corretamente" \
         "Container criado e conectado à rede!" \
         "docker run --network : Conecta container à rede
 --network-alias : Define um alias para o container na rede"
+
+    echo -e "\n8. Verificar containers na rede"
+    show_objective "Aprender a inspecionar redes Docker"
+    check_command_and_output \
+        "docker network inspect $NETWORK_NAME" \
+        "webserver" \
+        "Erro ao inspecionar rede" \
+        "output" \
+        "Vamos verificar quais containers estão conectados à rede" \
+        "Verifique se o container foi criado corretamente" \
+        "Rede inspecionada com sucesso!" \
+        "docker network inspect : Mostra detalhes da rede
+docker network connect : Conecta container à rede
+docker network disconnect : Desconecta container da rede"
 
     # Limpeza final
     show_progress "Realizando limpeza..."
@@ -547,7 +673,7 @@ docker network inspect : Mostra detalhes da rede"
     echo -e "\n----------------------------------------\n"
 }
 
-# --- Nível 3 - Dockerfile ---
+# --- Nível 3 - Avançado ---
 nivel_3() {
     show_section "Nível 3 - Criação de Imagens com Dockerfile"
     
@@ -561,7 +687,13 @@ nivel_3() {
         [ -f "$file" ] && rm -f "$file"
     done
 
-    # Remove imagem anterior se existir
+    # Remove imagem e container anteriores se existirem
+    if docker ps -a | grep -q "minha_app_container"; then
+        show_progress "Removendo container anterior..."
+        docker stop minha_app_container 2>/dev/null || true
+        docker rm minha_app_container 2>/dev/null || true
+    fi
+
     if docker images | grep -q "minha_app"; then
         show_progress "Removendo imagem anterior..."
         docker rmi minha_app 2>/dev/null || true
@@ -570,30 +702,31 @@ nivel_3() {
     echo -e "\n1. Criar aplicação Python simples"
     show_objective "Preparar uma aplicação simples para containerização"
     
-    show_progress "Criando app.py..."
+    show_explanation "Vamos criar um arquivo Python simples que imprime uma mensagem"
+    read -p "Pressione Enter para criar o arquivo app.py..."
+    
     cat > app.py << 'EOF'
 # Aplicação Python simples
 print("Olá! Esta é uma aplicação Python em um container Docker!")
 EOF
 
-    show_progress "Criando requirements.txt..."
+    show_explanation "Agora vamos criar um arquivo de dependências vazio"
+    read -p "Pressione Enter para criar o arquivo requirements.txt..."
     touch requirements.txt
 
+    if [ ! -f "app.py" ] || [ ! -f "requirements.txt" ]; then
+        show_error "Falha ao criar arquivos da aplicação"
+        return 1
+    fi
+
     show_success "Arquivos da aplicação criados!"
-    show_explanation "Criamos uma aplicação Python simples e um arquivo de dependências vazio"
 
     echo -e "\n2. Criar Dockerfile"
     show_objective "Aprender a escrever um Dockerfile básico"
-    show_explanation "O Dockerfile define como sua aplicação será empacotada"
-
-    show_command_help "Um Dockerfile básico deve conter:
-FROM : Define a imagem base
-WORKDIR : Define o diretório de trabalho
-COPY : Copia arquivos para a imagem
-RUN : Executa comandos durante a construção
-CMD : Define o comando padrão do container"
-
-    show_progress "Criando Dockerfile..."
+    
+    show_explanation "O Dockerfile contém as instruções para construir nossa imagem"
+    read -p "Pressione Enter para criar o Dockerfile..."
+    
     cat > Dockerfile << 'EOF'
 # Usa Python 3.9 como base
 FROM python:3.9-slim
@@ -612,31 +745,46 @@ RUN pip install --no-cache-dir -r requirements.txt
 CMD ["python", "app.py"]
 EOF
 
+    if [ ! -f "Dockerfile" ]; then
+        show_error "Falha ao criar Dockerfile"
+        return 1
+    fi
+
     show_success "Dockerfile criado!"
     
-    echo -e "\n3. Verificar estrutura do Dockerfile"
-    show_objective "Entender cada instrução do Dockerfile"
+    echo -e "\nConteúdo do Dockerfile criado:"
+    cat Dockerfile
+    echo -e "\n"
+
+    echo -e "\n3. Verificar arquivos"
+    show_objective "Confirmar que todos os arquivos necessários estão presentes"
     
-    check_command_and_output \
-        "cat Dockerfile" \
-        "FROM python" \
-        "Dockerfile não encontrado" \
-        "output" \
-        "Vamos analisar o conteúdo do Dockerfile" \
-        "Verifique se o arquivo foi criado corretamente" \
-        "Este é um Dockerfile básico para uma aplicação Python" \
-        "FROM : Imagem base
-WORKDIR : Diretório de trabalho
-COPY : Copia arquivos
-RUN : Executa comandos
-CMD : Comando padrão"
+    show_explanation "Vamos verificar se todos os arquivos necessários foram criados"
+    read -p "Pressione Enter para listar os arquivos..."
+    
+    ls -l app.py requirements.txt Dockerfile
+
+    local missing_files=false
+    for file in app.py requirements.txt Dockerfile; do
+        if [ ! -f "$file" ]; then
+            show_error "Arquivo $file não encontrado"
+            missing_files=true
+        fi
+    done
+
+    if [ "$missing_files" = true ]; then
+        show_error "Alguns arquivos necessários estão faltando"
+        return 1
+    fi
+
+    show_success "Todos os arquivos necessários estão presentes!"
 
     echo -e "\n4. Construir imagem"
     show_objective "Aprender a construir uma imagem a partir do Dockerfile"
     
     check_command_and_output \
         "docker build -t minha_app ." \
-        "Successfully built" \
+        "naming to docker.io/library/minha_app:latest|#12 DONE" \
         "Erro ao construir a imagem" \
         "output" \
         "O comando 'docker build' cria uma imagem a partir do Dockerfile" \
@@ -645,6 +793,12 @@ CMD : Comando padrão"
         "docker build : Constrói uma imagem
 -t : Define uma tag/nome
 . : Usa o diretório atual"
+
+    # Verificação adicional da imagem
+    if ! docker images | grep -q "minha_app"; then
+        show_error "A imagem não foi criada corretamente"
+        return 1
+    fi
 
     echo -e "\n5. Verificar imagem criada"
     show_objective "Aprender a listar e verificar imagens"
@@ -676,9 +830,13 @@ docker image inspect : Mostra detalhes da imagem"
 
     # Limpeza final
     show_progress "Realizando limpeza..."
+    docker stop minha_app_container 2>/dev/null || true
     docker rm minha_app_container 2>/dev/null || true
     docker rmi minha_app 2>/dev/null || true
-    rm -f "${files_to_clean[@]}" 2>/dev/null || true
+    
+    for file in "${files_to_clean[@]}"; do
+        rm -f "$file" 2>/dev/null || true
+    done
 
     show_success "Nível 3 concluído com sucesso!"
     show_explanation "Você aprendeu a criar suas próprias imagens Docker usando Dockerfile"
@@ -688,117 +846,44 @@ docker image inspect : Mostra detalhes da imagem"
 # Função principal
 main() {
     clear
-    show_section "Tutorial Interativo Docker"
+    echo -e "\n🐳 Bem-vindo ao Tutorial Interativo de Docker! 🐳\n"
     
-    show_explanation "Este tutorial irá guiá-lo através dos conceitos fundamentais do Docker.
-
-O tutorial está dividido em 3 níveis:
-
-1. Básico
-   - Comandos essenciais do Docker
-   - Gerenciamento de containers
-   - Manipulação de imagens
-
-2. Intermediário
-   - Volumes para persistência de dados
-   - Redes Docker
-   - Variáveis de ambiente
-
-3. Avançado
-   - Criação de Dockerfile
-   - Construção de imagens
-   - Boas práticas
-
-Em cada nível você receberá:
-✓ Instruções claras do que deve ser feito
-✓ Explicações sobre cada conceito
-✓ Exemplos práticos
-✓ Dicas em caso de erro
-✓ Ajuda detalhada dos comandos
-✓ Feedback sobre suas ações
-
-Recomendações:
-• Leia atentamente as explicações
-• Execute os comandos exatamente como mostrado
-• Use as dicas quando tiver dúvidas
-• Experimente os comandos adicionais sugeridos"
-
-    # Verificação inicial de requisitos
+    # Verifica requisitos antes de começar
     if ! check_requirements; then
-        show_error "Falha na verificação de requisitos. Corrija os problemas e tente novamente."
+        show_error "Requisitos não satisfeitos. Por favor, corrija os problemas e tente novamente."
         exit 1
     fi
 
-    # Nível 1
-    read -p "Pressione Enter para começar o Nível 1 (Básico)..."
-    if ! nivel_1; then
-        show_error "Erro ao completar o Nível 1"
-        show_tip "Revise os conceitos básicos e tente novamente"
-        exit 1
-    fi
-    
-    show_section "🎉 Nível 1 Concluído!"
-    show_explanation "Você já sabe:
-✓ Baixar imagens do Docker Hub
-✓ Criar e executar containers
-✓ Listar containers em execução
-✓ Parar e remover containers
-✓ Gerenciar imagens locais"
-    
-    # Nível 2
-    read -p "Pressione Enter para continuar para o Nível 2 (Intermediário)..."
-    if ! nivel_2; then
-        show_error "Erro ao completar o Nível 2"
-        show_tip "Revise os conceitos de volumes e redes e tente novamente"
-        exit 1
-    fi
-    
-    show_section "🎉 Nível 2 Concluído!"
-    show_explanation "Você já sabe:
-✓ Criar e gerenciar volumes
-✓ Persistir dados entre containers
-✓ Criar redes Docker
-✓ Conectar containers em rede
-✓ Usar variáveis de ambiente"
-    
-    # Nível 3
-    read -p "Pressione Enter para continuar para o Nível 3 (Avançado)..."
-    if ! nivel_3; then
-        show_error "Erro ao completar o Nível 3"
-        show_tip "Revise os conceitos de Dockerfile e tente novamente"
-        exit 1
-    fi
-
-    # Mensagem final de conclusão
-    show_section "🎊 Parabéns! Tutorial Concluído! 🎊"
-    
-    show_success "Você completou com sucesso todos os níveis do tutorial Docker!"
-    
-    show_explanation "Conceitos dominados:
-✓ Comandos básicos do Docker
-✓ Gerenciamento de containers e imagens
-✓ Volumes para persistência de dados
-✓ Redes Docker para comunicação
-✓ Criação de imagens com Dockerfile
-✓ Boas práticas de containerização
-
-Próximos passos sugeridos:
-1. Explore o Docker Compose para múltiplos containers
-2. Aprenda sobre Docker Swarm para orquestração
-3. Estude Kubernetes para ambientes mais complexos
-4. Pratique criando seus próprios projetos
-5. Aprenda sobre segurança em containers
-
-Recursos adicionais:
-• Documentação oficial: https://docs.docker.com
-• Docker Hub: https://hub.docker.com
-• Docker GitHub: https://github.com/docker
-• Docker Blog: https://www.docker.com/blog"
-
-    show_tip "Mantenha este script para referência e prática adicional"
-    
-    echo -e "\n----------------------------------------\n"
+    # Menu principal
+    while true; do
+        echo -e "\nEscolha um nível para começar:"
+        echo "1. Básico - Comandos fundamentais"
+        echo "2. Intermediário - Volumes, redes e variáveis de ambiente"
+        echo "3. Avançado - Criação de imagens com Dockerfile"
+        echo "0. Sair"
+        
+        read -p "Digite sua escolha (0-3): " choice
+        
+        case $choice in
+            1)
+                nivel_1
+                ;;
+            2)
+                nivel_2
+                ;;
+            3)
+                nivel_3
+                ;;
+            0)
+                echo -e "\n👋 Obrigado por usar o Tutorial Interativo de Docker!\n"
+                exit 0
+                ;;
+            *)
+                show_error "Opção inválida"
+                ;;
+        esac
+    done
 }
 
-# Execução do script
+# Executa a função principal
 main
